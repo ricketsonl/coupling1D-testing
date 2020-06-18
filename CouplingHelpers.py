@@ -158,12 +158,13 @@ class ConvectionDiffusion1D:
 # Laplacian(phi) = F(x,rho)
 ####################################################################################
 class VolumetricCoupledSystem1D:
-    def __init__(self,lu_lim,rl_lim,ncls_left,ncls_right,Convec,Diffuse,Drive,F,
+    def __init__(self,lu_lim,rl_lim,ncls_left,ncls_right,Convec,Diffuse,Drive,F,AveragingMethod,
                  lbdryval,rbdryval,lbdrytype='dirichlet',rbdrytype='dirichlet',
                  knot_mode='consistent',ltstep_mode='semi-implicit',rtstep_mode='semi-implicit',
                  left_buffer_width=0.,right_buffer_width=0.):
 
         self.Convec = Convec; self.Diffuse = Diffuse; self.Drive = Drive; self.F = F
+        self.AveragingMethod = AveragingMethod
 
         self.xl = np.linspace(0.,lu_lim,num=ncls_left+1)
         self.xr = np.linspace(rl_lim,1.,num=ncls_right+1)
@@ -193,7 +194,7 @@ class VolumetricCoupledSystem1D:
     # AveragingMethod(x) is a monotonically increasing function satisfying
     # AveragingMethod(0) = 0, AveragingMethod(1) = 1. It defines the method
     # by which the two solutions are averaged in the overlap region.
-    def CompositeSolution(self,AveragingMethod,x):
+    def CompositeSolution(self,x):
         rho_comp = np.zeros_like(x); phi_comp = np.zeros_like(x)
         
         left_x = x[x<self.rl_lim+self.left_buffer_width]; right_x = x[x>self.lu_lim-self.right_buffer_width]
@@ -212,17 +213,17 @@ class VolumetricCoupledSystem1D:
         
         avg_x = (mid_x - mid_x[0])/(x[right_start] - mid_x[0])
 
-        rho_comp[mid_start:right_start] = AveragingMethod(avg_x)*rhor_spl(mid_x) + (1. - AveragingMethod(avg_x))*rhol_spl(mid_x)
-        phi_comp[mid_start:right_start] = AveragingMethod(avg_x)*phir_spl(mid_x) + (1. - AveragingMethod(avg_x))*phil_spl(mid_x)
+        rho_comp[mid_start:right_start] = self.AveragingMethod(avg_x)*rhor_spl(mid_x) + (1. - self.AveragingMethod(avg_x))*rhol_spl(mid_x)
+        phi_comp[mid_start:right_start] = self.AveragingMethod(avg_x)*phir_spl(mid_x) + (1. - self.AveragingMethod(avg_x))*phil_spl(mid_x)
         
         return rho_comp
     
     # Compute the field phi on the entire domain, with Dirichlet 
     # boundary conditions phi(0) = lfval, phi(1) = rfval.  
     # Specifically, solve: Laplacian(phi) = F(x,rho_comp)
-    def CompositeField(self,AveragingMethod,npts,lfval,rfval):
+    def CompositeField(self,npts,lfval,rfval):
         x = np.linspace(0.,1.,num=npts)
-        rho_comp = self.CompositeSolution(AveragingMethod,x)
+        rho_comp = self.CompositeSolution(x)
         phi_comp = Poisson1D_Dirichlet(1.,self.F(x,rho_comp),lfval,rfval)
 
         return phi_comp
@@ -357,9 +358,9 @@ class VolumetricCoupledSystem1D:
             self.rhor = newton_krylov(Func,self.rhor)            
 
 
-    def FullTimeStep_CompositeField(self,Averager,dt,lfval,rfval,nfpts):
+    def FullTimeStep_CompositeField(self,dt,lfval,rfval,nfpts):
         x_comp = np.linspace(0.,1.,num=nfpts)
-        phi_comp = self.CompositeField(Averager,nfpts,lfval,rfval)
+        phi_comp = self.CompositeField(nfpts,lfval,rfval)
         rhol_spl = InterpolatedUnivariateSpline(self.xl,self.rhol)
         rhor_spl = InterpolatedUnivariateSpline(self.xr,self.rhor)
         if self.knot_mode == 'consistent':
@@ -395,14 +396,14 @@ class VolumetricCoupledSystem1D:
         self.RightTimeStep_CompositeField(dt,lintbdryval,self.xr,self.phir)
         self.t += dt
 
-    def RunForFixedTime(self,T,numsteps,Averager,lfval,rfval,npts,field_mode='composite'):
+    def RunForFixedTime(self,T,numsteps,lfval,rfval,npts,field_mode='composite'):
         
         if self.ltstep_mode == 'explicit' or self.rtstep_mode == 'explicit':
             print 'Explicit mode - need to override time step for CFL safety'
             x = np.linspace(0.,1.,num=100)
             Diffuse_Max = np.amax(self.Diffuse(x,
-                          self.CompositeSolution(Averager,x),
-                          self.CompositeField(Averager,100,lfval,rfval)))
+                          self.CompositeSolution(x),
+                          self.CompositeField(100,lfval,rfval)))
             dt = 0.5*min(self.dxl,self.dxr)**2/(Diffuse_Max*1.3)
             real_numsteps = int(T/dt) + 1
             dt = T/real_numsteps
@@ -413,18 +414,18 @@ class VolumetricCoupledSystem1D:
 
         rhovec = np.zeros([real_numsteps+1,npts])
         x_comp = np.linspace(0.,1.,num=npts)
-        rhovec[0,:] =  self.CompositeSolution(Averager,x_comp)
+        rhovec[0,:] =  self.CompositeSolution(x_comp)
 
-        phi_comp = self.CompositeField(Averager,npts,lfval,rfval)
+        phi_comp = self.CompositeField(npts,lfval,rfval)
         phi_spl = InterpolatedUnivariateSpline(x_comp,phi_comp)
         self.phil = phi_spl(self.xl); self.phir = phi_spl(self.xr)
         for i in range(real_numsteps):
             if field_mode=='composite':
-                self.FullTimeStep_CompositeField(Averager,dt,lfval,rfval,npts)
+                self.FullTimeStep_CompositeField(dt,lfval,rfval,npts)
             else:
                 self.FullTimeStep_SeparateFields(dt,lfval,rfval)
 
-            rhovec[i+1,:] = self.CompositeSolution(Averager,x_comp)
+            rhovec[i+1,:] = self.CompositeSolution(x_comp)
         
         if real_numsteps == numsteps:
             return rhovec
@@ -439,17 +440,17 @@ class VolumetricCoupledSystem1D:
 
             return true_rhovec
 
-    def RunToEQ(self,dt,Averager,lfval,rfval,npts,field_mode='composite',maxsteps=10000,errtol=1.e-6):
+    def RunToEQ(self,dt,lfval,rfval,npts,field_mode='composite',maxsteps=10000,errtol=1.e-6):
         x_comp = np.linspace(0.,1.,num=npts)
         rho_new = np.zeros_like(x_comp)
         err = 1.
         it = 0
         while(err > errtol and it < maxsteps):
             if field_mode=='composite':
-                self.FullTimeStep_CompositeField(Averager,dt,lfval,rfval,npts)
+                self.FullTimeStep_CompositeField(dt,lfval,rfval,npts)
             else:
                 self.FullTimeStep_SeparateFields(dt,lfval,rfval)
-            rho_comp = self.CompositeSolution(Averager,x_comp)
+            rho_comp = self.CompositeSolution(x_comp)
             err = np.sqrt(np.mean((rho_comp - rho_new)**2))
             it += 1
             rho_new = rho_comp

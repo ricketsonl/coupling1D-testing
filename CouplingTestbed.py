@@ -46,7 +46,7 @@ runmode = 'composite'
 # 'consistent' means each region gets its internal boundary condition
 # from the other region's value at previous time step
 # 'zero' means the internal boundary conditions are just set to 0
-knotting = 'zero'
+knotting = 'consistent'
 if knotting == 'zero':
     lbuff = lbuffer; rbuff = rbuffer
 else:
@@ -69,6 +69,10 @@ lbval = 0.; rbval = 0.
 #plt.figure('Forcing Profile')
 #plt.plot(x,CDT.CleanDrive(x,0,0))
 
+# Function defining how to average over the overlap region
+def Averager(x):
+    return x
+
 num_xpts = 100
 # Build a standard solver object
 mySolver = CH.ConvectionDiffusion1D(num_xpts,CDT.Convec,CDT.Diffuse,CDT.Drive,CDT.PoissRHS,
@@ -76,23 +80,20 @@ mySolver = CH.ConvectionDiffusion1D(num_xpts,CDT.Convec,CDT.Diffuse,CDT.Drive,CD
 
 # Build coupled solver object
 mySys = CH.VolumetricCoupledSystem1D(lu_lim,rl_lim,ncls_l,ncls_r,
-                                    CDT.Convec,CDT.Diffuse,CDT.Drive,CDT.PoissRHS,
+                                    CDT.Convec,CDT.Diffuse,CDT.Drive,CDT.PoissRHS,Averager,
                                     lbval,rbval,knot_mode=knotting,
                                     ltstep_mode=time_step_mode_coupled_left,
                                     rtstep_mode=time_step_mode_coupled_right,
                                     left_buffer_width=lbuff,
                                     right_buffer_width=rbuff)
 
-# Function defining how to average over the overlap region
-def Averager(x):
-    return x
 
 # Initialize rho
 mySys.rhol = CDT.InitData(mySys.xl)
 mySys.rhor = CDT.InitData(mySys.xr)
 mySolver.rho = CDT.InitData(mySolver.x)
 # Run simulation
-solvals = mySys.RunForFixedTime(TotTime,numsteps,Averager,0.,0.,100,field_mode=runmode)
+solvals = mySys.RunForFixedTime(TotTime,numsteps,0.,0.,100,field_mode=runmode)
 uncoupled_solvals = mySolver.RunForFixedTime(TotTime,numsteps,0.,0.)
 """eq_sol_coupled = mySys.RunToEQ(TotTime/numsteps,Averager,0.,0.,mySolver.x.shape[0],field_mode=runmode,maxsteps=10000,errtol=1.e-7)
 eq_sol_normal = mySolver.RunToEQ(TotTime/numsteps,0.,0.,errtol=1.e-7,maxsteps=10000)
